@@ -5,9 +5,11 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 
-	
+	_ "github.com/lib/pq"
 )
 
 type Product struct {
@@ -50,15 +52,23 @@ var (
 
 func main() {
 	var err error
-	db, err = sql.Open("sqlite3", "./agri.db")
+
+	db, err = sql.Open("postgres", postgresDSN())
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
 
+	if err = db.Ping(); err != nil {
+		log.Fatal("database connection failed: ", err)
+	}
+
 	createTables()
 
-	tmpl = template.Must(template.ParseFiles("templates/index.html"))
+	tmpl, err = template.ParseFiles(templatePath())
+	if err != nil {
+		log.Fatal("unable to load template: ", err)
+	}
 
 	http.HandleFunc("/", homeHandler)
 	http.HandleFunc("/add-product", addProductHandler)
@@ -69,29 +79,61 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
+func postgresDSN() string {
+	if value := os.Getenv("AGRI_DB_URL"); value != "" {
+		return value
+	}
+	return defaultDBURL()
+}
+
+func defaultDBURL() string {
+	return "postgres://postgres:golang123@localhost:5433/agriapp?sslmode=disable"
+}
+
+func templatePath() string {
+	if value := os.Getenv("AGRI_TEMPLATE_PATH"); value != "" {
+		return value
+	}
+
+	baseDir, err := os.Getwd()
+	if err == nil {
+		candidate := filepath.Join(baseDir, "template", "index.html")
+		if _, statErr := os.Stat(candidate); statErr == nil {
+			return candidate
+		}
+	}
+
+	candidate := filepath.Join("template", "index.html")
+	if _, err := os.Stat(candidate); err == nil {
+		return candidate
+	}
+
+	return filepath.Join("..", "template", "index.html")
+}
+
 func createTables() {
 	productTable := `
 	CREATE TABLE IF NOT EXISTS products (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		id SERIAL PRIMARY KEY,
 		name TEXT,
 		category TEXT,
-		price REAL,
+		price DOUBLE PRECISION,
 		stock INTEGER
 	);`
 
 	saleTable := `
 	CREATE TABLE IF NOT EXISTS sales (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		id SERIAL PRIMARY KEY,
 		product_name TEXT,
 		quantity INTEGER,
 		buyer TEXT,
 		date TEXT,
-		total REAL
+		total DOUBLE PRECISION
 	);`
 
 	scheduleTable := `
 	CREATE TABLE IF NOT EXISTS schedules (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		id SERIAL PRIMARY KEY,
 		farmer_name TEXT,
 		crop_name TEXT,
 		land_area TEXT,
@@ -140,7 +182,7 @@ func addProductHandler(w http.ResponseWriter, r *http.Request) {
 	price, _ := strconv.ParseFloat(r.FormValue("price"), 64)
 	stock, _ := strconv.Atoi(r.FormValue("stock"))
 
-	_, err := db.Exec("INSERT INTO products(name, category, price, stock) VALUES(?, ?, ?, ?)", name, category, price, stock)
+	_, err := db.Exec("INSERT INTO products(name, category, price, stock) VALUES($1, $2, $3, $4)", name, category, price, stock)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -161,7 +203,7 @@ func addSaleHandler(w http.ResponseWriter, r *http.Request) {
 	date := r.FormValue("date")
 	total, _ := strconv.ParseFloat(r.FormValue("total"), 64)
 
-	_, err := db.Exec("INSERT INTO sales(product_name, quantity, buyer, date, total) VALUES(?, ?, ?, ?, ?)", productName, quantity, buyer, date, total)
+	_, err := db.Exec("INSERT INTO sales(product_name, quantity, buyer, date, total) VALUES($1, $2, $3, $4, $5)", productName, quantity, buyer, date, total)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -183,7 +225,7 @@ func addScheduleHandler(w http.ResponseWriter, r *http.Request) {
 	date := r.FormValue("date")
 	status := r.FormValue("status")
 
-	_, err := db.Exec("INSERT INTO schedules(farmer_name, crop_name, land_area, task, date, status) VALUES(?, ?, ?, ?, ?, ?)",
+	_, err := db.Exec("INSERT INTO schedules(farmer_name, crop_name, land_area, task, date, status) VALUES($1, $2, $3, $4, $5, $6)",
 		farmerName, cropName, landArea, task, date, status)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -203,7 +245,10 @@ func getProducts() []Product {
 	var products []Product
 	for rows.Next() {
 		var p Product
-		rows.Scan(&p.ID, &p.Name, &p.Category, &p.Price, &p.Stock)
+		if err := rows.Scan(&p.ID, &p.Name, &p.Category, &p.Price, &p.Stock); err != nil {
+			log.Println("scan product failed:", err)
+			return products
+		}
 		products = append(products, p)
 	}
 	return products
@@ -219,7 +264,10 @@ func getSales() []Sale {
 	var sales []Sale
 	for rows.Next() {
 		var s Sale
-		rows.Scan(&s.ID, &s.ProductName, &s.Quantity, &s.Buyer, &s.Date, &s.Total)
+		if err := rows.Scan(&s.ID, &s.ProductName, &s.Quantity, &s.Buyer, &s.Date, &s.Total); err != nil {
+			log.Println("scan sale failed:", err)
+			return sales
+		}
 		sales = append(sales, s)
 	}
 	return sales
@@ -235,7 +283,10 @@ func getSchedules() []Schedule {
 	var schedules []Schedule
 	for rows.Next() {
 		var s Schedule
-		rows.Scan(&s.ID, &s.FarmerName, &s.CropName, &s.LandArea, &s.Task, &s.Date, &s.Status)
+		if err := rows.Scan(&s.ID, &s.FarmerName, &s.CropName, &s.LandArea, &s.Task, &s.Date, &s.Status); err != nil {
+			log.Println("scan schedule failed:", err)
+			return schedules
+		}
 		schedules = append(schedules, s)
 	}
 	return schedules
