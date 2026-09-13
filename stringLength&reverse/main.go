@@ -1,0 +1,18 @@
+package main
+
+import (
+	"fmt"
+)
+
+func main() {
+	s := "Hello Go"
+	fmt.Println("Original:", s)
+	fmt.Println("Length:", len(s))
+
+	// Reverse
+	runes := []rune(s)
+	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
+		runes[i], runes[j] = runes[j], runes[i]
+	}
+	fmt.Println("Reverse:", string(runes))
+}
